@@ -1,27 +1,28 @@
 # Survey Data Processing
 
-This repository contains scripts and data for processing survey samples, calculating weights based on stratified sampling (Gender, Age, Rural/Urban), and generating a dashboard of results.
+This repository contains scripts and data for processing survey samples, calculating weights based on stratified sampling (Gender, Age, Rural/Urban), and generating a dashboard of results. It also includes tools to generate detailed field work plans based on the sample design.
 
 ## Files
 
-- `process_sample.py`: Main script to process data, calculate weights, and generate `dashboard.html`.
+- `process_sample.py`: Main script to process collected data, calculate weights, and generate `dashboard.html`.
+- `create_field_design.py`: Script to generate `plan_de_campo.xlsx` with detailed quotas for field work (State, Rural/Urban, Gender, Age).
 - `stratified_sampling.py`: Alternative script for design error calculation.
-- `analysis_notebook.ipynb`: Jupyter Notebook designed to run the analysis in Google Colab.
+- `analysis_notebook.ipynb`: Jupyter Notebook designed to run the analysis and generate field plans in Google Colab.
 - `sample_data.csv`: Input survey data (semicolon separated).
-- `diseño_muestral.xlsx`: Sampling design targets.
+- `diseño_muestral.xlsx`: Sampling design targets (State level).
 - `RURAL_URBANO.xlsx`: Rural/Urban classification of municipalities.
 
 ## Running in Google Colab
 
-To run the analysis in Google Colab using the provided notebook:
+To run the analysis or generate field plans in Google Colab using the provided notebook:
 
 1.  **Open the Notebook**: Upload `analysis_notebook.ipynb` to Google Drive and open it with Google Colab.
-2.  **Configure Repository**: In the "Clone Repository" cell, replace `YOUR_REPO_URL_HERE` with the URL of this repository (e.g., `https://github.com/username/repo.git`).
+2.  **Configure Repository**: In the "Clone Repository" cell, replace `YOUR_REPO_URL_HERE` with the URL of this repository.
 3.  **Run All Cells**: Execute the cells in order.
-    -   The notebook will mount your Google Drive.
-    -   It will clone the repository into your Drive (folder `MyDrive/<repo_name>`).
-    -   It will install necessary dependencies (`pandas`, `numpy`, `openpyxl`, `plotly`).
-    -   It will run the processing script and display the dashboard.
+    -   The notebook will mount your Google Drive and clone the repository.
+    -   It will install necessary dependencies.
+    -   **Generate Field Design**: A cell is provided to run `create_field_design.py`, which produces `plan_de_campo.xlsx` containing the target quotas for field workers.
+    -   **Run Analysis**: It will run `process_sample.py` to process `sample_data.csv` and display the dashboard.
 
 ## Local Execution
 
@@ -31,8 +32,15 @@ To run locally:
     ```bash
     pip install pandas numpy openpyxl plotly
     ```
-2.  Run the script:
+
+2.  **Generate Field Design Plan**:
+    ```bash
+    python create_field_design.py
+    ```
+    This creates `plan_de_campo.xlsx`.
+
+3.  **Process Collected Data**:
     ```bash
     python process_sample.py
     ```
-3.  Open `dashboard.html` in your browser.
+    This processes `sample_data.csv` and creates `dashboard.html`.
