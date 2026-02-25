@@ -4,6 +4,11 @@ import unicodedata
 import math
 import sys
 
+# Constants for default configuration
+TARGET_N = 3000
+N_STATES = 10
+MUNIS_PER_STATE = 2
+
 def normalize_text(text):
     if pd.isna(text):
         return ""
@@ -219,6 +224,39 @@ def main():
         actual_total = df_field_plan['Cuota'].sum() if not df_field_plan.empty else 0
         df_metrics = generate_metrics_sheet(actual_total, total_pop)
 
+        # 1. Simulation Sheet
+        df_simulation = simulate_scenarios(df_design)
+
+        # 2. Sample Design Sheet
+        df_sample_design = select_sample(df_design, df_rural, target_n=TARGET_N, n_states=N_STATES, munis_per_state=MUNIS_PER_STATE)
+
+        # 3. Metrics Sheet
+        if not df_sample_design.empty:
+            actual_n = df_sample_design['Cuota'].sum()
+            N = df_design['poblacion'].sum()
+            p = 0.5
+            q = 0.5
+            Z = 1.96
+            Deff = 1.5
+
+            se = np.sqrt((p*q)/actual_n) if actual_n > 0 else 0
+            fpc = np.sqrt((N-actual_n)/(N-1)) if N > 1 else 1
+            moe = Z * se * np.sqrt(Deff) * fpc
+
+            metrics = [{
+                'Tamaño de Muestra Real': actual_n,
+                'Margen de Error (95%)': moe,
+                'Nivel de Confianza': '95%',
+                'Efecto de Diseño': Deff,
+                'Población Total (Referencia)': N,
+                'Estados Seleccionados': df_sample_design['Estado'].nunique(),
+                'Municipios Seleccionados': df_sample_design['Municipio'].nunique()
+            }]
+            df_metrics = pd.DataFrame(metrics)
+        else:
+            df_metrics = pd.DataFrame([{'Info': 'No sample generated'}])
+
+        # Write to Excel with multiple sheets
         output_file = 'plan_de_campo.xlsx'
         with pd.ExcelWriter(output_file) as writer:
             if not df_field_plan.empty:
