@@ -3,9 +3,9 @@ import numpy as np
 import unicodedata
 
 # Constants for default configuration
-TARGET_N = 3000
-N_STATES = 10
-MUNIS_PER_STATE = 2
+DEFAULT_TARGET_N = 3000
+DEFAULT_N_STATES = 10
+DEFAULT_MUNIS_PER_STATE = 2
 
 def normalize_text(text):
     if pd.isna(text):
@@ -56,7 +56,7 @@ def simulate_scenarios(df_design):
 
     return pd.DataFrame(scenarios)
 
-def select_sample(df_design, df_rural, target_n=TARGET_N, n_states=N_STATES, munis_per_state=MUNIS_PER_STATE):
+def select_sample(df_design, df_rural, target_n, n_states, munis_per_state):
     print(f"Selecting Sample (Target N={target_n}, States={n_states}, Munis/State={munis_per_state})...")
 
     # Normalize
@@ -226,19 +226,44 @@ def select_sample(df_design, df_rural, target_n=TARGET_N, n_states=N_STATES, mun
 
     return df_sample_design
 
-def main():
+def pivot_field_plan(df_sample_design):
+    if df_sample_design.empty:
+        return df_sample_design
+
+    # Create combined column for Gender - Age
+    df_sample_design['Segmento'] = df_sample_design['Género'] + ' - ' + df_sample_design['Grupo de Edad']
+
+    # Pivot
+    df_pivot = df_sample_design.pivot_table(
+        index=['Estado', 'Municipio', 'Tipo'],
+        columns='Segmento',
+        values='Cuota',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+
+    # Calculate Total per Municipality
+    quota_cols = [c for c in df_pivot.columns if c not in ['Estado', 'Municipio', 'Tipo']]
+    df_pivot['Total Muestra'] = df_pivot[quota_cols].sum(axis=1)
+
+    return df_pivot
+
+def main(target_n=DEFAULT_TARGET_N, n_states=DEFAULT_N_STATES, munis_per_state=DEFAULT_MUNIS_PER_STATE):
     try:
         df_design, df_rural = load_data()
 
         # 1. Simulation Sheet
         df_simulation = simulate_scenarios(df_design)
 
-        # 2. Sample Design Sheet
-        df_sample_design = select_sample(df_design, df_rural, target_n=TARGET_N, n_states=N_STATES, munis_per_state=MUNIS_PER_STATE)
+        # 2. Sample Design Sheet (Raw)
+        df_sample_design_raw = select_sample(df_design, df_rural, target_n, n_states, munis_per_state)
 
-        # 3. Metrics Sheet
-        if not df_sample_design.empty:
-            actual_n = df_sample_design['Cuota'].sum()
+        # 3. Pivot Design Sheet (Wide format)
+        df_field_plan = pivot_field_plan(df_sample_design_raw)
+
+        # 4. Metrics Sheet
+        if not df_sample_design_raw.empty:
+            actual_n = df_sample_design_raw['Cuota'].sum()
             N = df_design['poblacion'].sum()
             p = 0.5
             q = 0.5
@@ -250,13 +275,16 @@ def main():
             moe = Z * se * np.sqrt(Deff) * fpc
 
             metrics = [{
+                'Tamaño de Muestra Objetivo': target_n,
                 'Tamaño de Muestra Real': actual_n,
                 'Margen de Error (95%)': moe,
                 'Nivel de Confianza': '95%',
                 'Efecto de Diseño': Deff,
                 'Población Total (Referencia)': N,
-                'Estados Seleccionados': df_sample_design['Estado'].nunique(),
-                'Municipios Seleccionados': df_sample_design['Municipio'].nunique()
+                'Estados Objetivo': n_states,
+                'Municipios por Estado Objetivo': munis_per_state,
+                'Estados Seleccionados': df_sample_design_raw['Estado'].nunique(),
+                'Municipios Seleccionados': df_sample_design_raw['Municipio'].nunique()
             }]
             df_metrics = pd.DataFrame(metrics)
         else:
@@ -265,9 +293,11 @@ def main():
         # Write to Excel with multiple sheets
         output_file = 'plan_de_campo.xlsx'
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-            df_sample_design.to_excel(writer, sheet_name='Plan de Campo', index=False)
+            df_field_plan.to_excel(writer, sheet_name='Plan de Campo', index=False)
             df_metrics.to_excel(writer, sheet_name='Métricas', index=False)
             df_simulation.to_excel(writer, sheet_name='Simulación Muestra', index=False)
+            # Optional: Raw data
+            # df_sample_design_raw.to_excel(writer, sheet_name='Data Cruda', index=False)
 
         print(f"Field design saved to {output_file}")
 
@@ -277,4 +307,12 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    import sys
+    # Simple argument parsing if run from CLI
+    # python create_field_design.py 3000 10 2
+    args = sys.argv[1:]
+    t_n = int(args[0]) if len(args) > 0 else DEFAULT_TARGET_N
+    n_s = int(args[1]) if len(args) > 1 else DEFAULT_N_STATES
+    m_s = int(args[2]) if len(args) > 2 else DEFAULT_MUNIS_PER_STATE
+
+    main(target_n=t_n, n_states=n_s, munis_per_state=m_s)
