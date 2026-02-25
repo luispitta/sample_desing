@@ -1,13 +1,11 @@
 import pandas as pd
 import numpy as np
 import unicodedata
-import math
-import sys
 
 # Constants for default configuration
-TARGET_N = 3000
-N_STATES = 10
-MUNIS_PER_STATE = 2
+DEFAULT_TARGET_N = 3000
+DEFAULT_N_STATES = 10
+DEFAULT_MUNIS_PER_STATE = 2
 
 def normalize_text(text):
     if pd.isna(text):
@@ -19,238 +17,274 @@ def normalize_text(text):
 
 def load_data():
     print("Loading data...")
-    try:
-        df_design = pd.read_excel('diseño_muestral.xlsx')
-        df_rural = pd.read_excel('RURAL_URBANO.xlsx')
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    df_design = pd.read_excel('diseño_muestral.xlsx')
+    df_rural = pd.read_excel('RURAL_URBANO.xlsx')
     return df_design, df_rural
 
-def scale_sample(df_design, target_total=3000):
-    current_total = df_design['muestra'].sum()
-    print(f"Current total sample: {current_total}")
-    print(f"Target total sample: {target_total}")
+def simulate_scenarios(df_design):
+    print("Simulating Scenarios (Sample Size vs Error)...")
+    
+    # Simple simulation of Error vs Sample Size
+    # MoE = Z * sqrt(p*q/n) * sqrt(Deff) * sqrt((N-n)/(N-1))
+    
+    scenarios = []
+    
+    # Total Population
+    N = df_design['poblacion'].sum()
+    p = 0.5
+    q = 0.5
+    Z = 1.96 # 95% Confidence Level
+    Deff = 1.5 # Assumed Design Effect for cluster sampling
+    
+    sample_sizes = [1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000]
+    
+    for n in sample_sizes:
+        if n >= N:
+            moe = 0
+        else:
+            se = np.sqrt((p*q)/n)
+            # Finite Population Correction
+            fpc = np.sqrt((N-n)/(N-1))
+            moe = Z * se * np.sqrt(Deff) * fpc
+            
+        scenarios.append({
+            'Tamaño de Muestra': n,
+            'Margen de Error (95%)': moe,
+            'Nivel de Confianza': '95%',
+            'Efecto de Diseño (Asumido)': Deff
+        })
+        
+    return pd.DataFrame(scenarios)
 
-    # Calculate raw target
-    df_design['raw_target'] = (df_design['muestra'] / current_total) * target_total
-
-    # Integer part
-    df_design['int_target'] = np.floor(df_design['raw_target']).astype(int)
-
-    # Remainder
-    df_design['remainder'] = df_design['raw_target'] - df_design['int_target']
-
-    # Distribute remaining count
-    current_scaled_total = df_design['int_target'].sum()
-    needed = int(target_total - current_scaled_total)
-
-    print(f"Distributing {needed} remaining samples based on fractional parts...")
-
-    # Sort by remainder descending
-    df_design = df_design.sort_values('remainder', ascending=False)
-
-    # Initialize final_quota
-    df_design['final_quota'] = df_design['int_target']
-
-    if needed > 0:
-        # Use numpy array to avoid potential SettingWithCopy warnings or index alignment issues
-        # We want to add 1 to the first 'needed' rows in the current sorted order
-        # Since we are working on the dataframe directly, iloc relies on position
-        col_idx = df_design.columns.get_loc('final_quota')
-        # We need to iterate or use vector addition on the slice
-        # direct += 1 on iloc slice works in modern pandas
-        df_design.iloc[:needed, col_idx] += 1
-
-    print(f"New total sample: {df_design['final_quota'].sum()}")
-
-    return df_design.sort_index()
-
-def select_municipalities(df_rural, seed=42):
-    np.random.seed(seed)
-
-    # Group by State and Type
-    grouped = df_rural.groupby(['ESTADO_NORM', 'TIPO'])['MUNICIPIO'].apply(list).reset_index()
-
-    selection_map = {} # (State) -> {'Rural': [munis], 'Urbano': [munis]}
-
-    for _, row in grouped.iterrows():
-        state = row['ESTADO_NORM']
-        tipo = row['TIPO']
-        munis = sorted(list(set(row['MUNICIPIO']))) # Unique & Sorted
-        n_munis = len(munis)
-
-        # Selection logic: 30% or min 2 (or all if < 2)
-        k = max(2, math.ceil(n_munis * 0.3))
-        k = min(k, n_munis)
-
-        selected = np.random.choice(munis, size=k, replace=False).tolist()
-        selected.sort()
-
-        if state not in selection_map:
-            selection_map[state] = {}
-        selection_map[state][tipo] = selected
-
-    return selection_map
-
-def generate_field_plan(df_design, df_rural):
+def select_sample(df_design, df_rural, target_n, n_states, munis_per_state):
+    print(f"Selecting Sample (Target N={target_n}, States={n_states}, Munis/State={munis_per_state})...")
+    
     # Normalize
     df_design['estado_norm'] = df_design['estado'].apply(normalize_text)
     df_rural['ESTADO_NORM'] = df_rural['ESTADO'].apply(normalize_text)
+    
+    # Handle Vargas -> La Guaira mapping in design data
+    # Check if 'vargas' exists in design but only 'la guaira' in rural
+    unique_rural_states = df_rural['ESTADO_NORM'].unique()
+    if 'vargas' not in unique_rural_states and 'la guaira' in unique_rural_states:
+        df_design.loc[df_design['estado_norm'] == 'vargas', 'estado_norm'] = 'la guaira'
 
-    # Fix Vargas -> La Guaira
-    if 'vargas' in df_design['estado_norm'].unique() and 'la guaira' in df_rural['ESTADO_NORM'].unique():
-         df_design.loc[df_design['estado_norm'] == 'vargas', 'estado_norm'] = 'la guaira'
-
-    # Scale Sample
-    df_design = scale_sample(df_design, target_total=3000)
-
-    # Select Munis
-    selection_map = select_municipalities(df_rural)
-
-    # Calc Proportions
-    muni_counts = df_rural.groupby(['ESTADO_NORM', 'TIPO']).size().reset_index(name='n_munis')
-    state_totals = df_rural.groupby('ESTADO_NORM').size().reset_index(name='total_munis')
-    muni_props = pd.merge(muni_counts, state_totals, on='ESTADO_NORM')
-    muni_props['type_prop'] = muni_props['n_munis'] / muni_props['total_munis']
-
-    prop_map = {}
-    for _, row in muni_props.iterrows():
-        if row['ESTADO_NORM'] not in prop_map:
-            prop_map[row['ESTADO_NORM']] = {}
-        prop_map[row['ESTADO_NORM']][row['TIPO']] = row['type_prop']
-
-    output_rows = []
-
-    for _, row in df_design.iterrows():
-        state = row['estado_norm']
-        orig_state_name = row['estado']
-        gender = row['genero']
-        age = row['grupo_edad']
-        quota = int(row['final_quota'])
-
-        if quota == 0:
+    # Get list of unique states in design
+    all_states = df_design['estado_norm'].unique()
+    
+    # Select States Randomly
+    if n_states >= len(all_states):
+        selected_states = all_states
+    else:
+        # Sort for reproducibility if needed, or just random
+        # Using random choice
+        selected_states = np.random.choice(all_states, size=n_states, replace=False)
+        
+    print(f"Selected States: {selected_states}")
+    
+    # Calculate Total Population of Selected States
+    df_design_selected = df_design[df_design['estado_norm'].isin(selected_states)].copy()
+    total_pop_selected = df_design_selected['poblacion'].sum()
+    
+    # Calculate Target Sample per State (Proportional Allocation)
+    state_pops = df_design_selected.groupby('estado_norm')['poblacion'].sum().reset_index()
+    state_pops['state_prop'] = state_pops['poblacion'] / total_pop_selected
+    state_pops['target_n_state'] = (state_pops['state_prop'] * target_n).round().astype(int)
+    
+    # Prepare Output List
+    sample_list = []
+    
+    for state in selected_states:
+        # Get target n for this state
+        n_state_series = state_pops.loc[state_pops['estado_norm'] == state, 'target_n_state']
+        if n_state_series.empty:
             continue
+        n_state = n_state_series.values[0]
+        
+        if n_state == 0:
+            continue
+            
+        # Get available municipalities for this state
+        state_munis = df_rural[df_rural['ESTADO_NORM'] == state]
+        
+        # Determine Rural/Urban split based on municipality counts
+        n_rural_munis = state_munis[state_munis['TIPO'] == 'Rural'].shape[0]
+        n_urban_munis = state_munis[state_munis['TIPO'] == 'Urbano'].shape[0]
+        total_munis = n_rural_munis + n_urban_munis
+        
+        if total_munis == 0:
+            continue
+            
+        prop_rural = n_rural_munis / total_munis
+        prop_urban = n_urban_munis / total_munis
+        
+        target_n_rural = int(round(n_state * prop_rural))
+        target_n_urban = int(round(n_state * prop_urban))
+        
+        # Adjust remainder
+        remainder = n_state - (target_n_rural + target_n_urban)
+        if remainder != 0:
+            if target_n_rural >= target_n_urban:
+                target_n_rural += remainder
+            else:
+                target_n_urban += remainder
 
-        rural_p = prop_map.get(state, {}).get('Rural', 0.0)
-        urban_p = prop_map.get(state, {}).get('Urbano', 0.0)
+        # Select Municipalities
+        selected_munis = []
+        
+        # Select Rural Munis
+        rural_options = state_munis[state_munis['TIPO'] == 'Rural']['MUNICIPIO'].unique()
+        if target_n_rural > 0 and len(rural_options) > 0:
+            # We try to pick proportional number of munis based on type split, 
+            # but ensure we don't pick 0 if we need sample
+            n_pick_rural = max(1, int(round(munis_per_state * prop_rural)))
+            if n_pick_rural > len(rural_options):
+                n_pick_rural = len(rural_options)
+            
+            picked_rural = np.random.choice(rural_options, size=n_pick_rural, replace=False)
+            
+            base_n = target_n_rural // n_pick_rural
+            rem = target_n_rural % n_pick_rural
+            
+            for i, muni in enumerate(picked_rural):
+                quota = base_n + (1 if i < rem else 0)
+                selected_munis.append({'MUNICIPIO': muni, 'TIPO': 'Rural', 'QUOTA': quota})
+                
+        elif target_n_rural > 0:
+            pass # No rural munis available but needed quota? Unlikely if props are from same file.
 
-        # If State not in prop_map (e.g. Dependencias Federales), handle gracefully
-        if state not in prop_map:
-            urban_p = 1.0 # Default to Urban
+        # Select Urban Munis
+        urban_options = state_munis[state_munis['TIPO'] == 'Urbano']['MUNICIPIO'].unique()
+        if target_n_urban > 0 and len(urban_options) > 0:
+            n_pick_urban = max(1, int(round(munis_per_state * prop_urban)))
+            if n_pick_urban > len(urban_options):
+                n_pick_urban = len(urban_options)
+            
+            # Ensure we pick at least 1 urban if quota exists and options exist
+            if n_pick_urban == 0 and target_n_urban > 0: 
+                n_pick_urban = 1
+                
+            picked_urban = np.random.choice(urban_options, size=n_pick_urban, replace=False)
+            
+            base_n = target_n_urban // n_pick_urban
+            rem = target_n_urban % n_pick_urban
+            
+            for i, muni in enumerate(picked_urban):
+                quota = base_n + (1 if i < rem else 0)
+                selected_munis.append({'MUNICIPIO': muni, 'TIPO': 'Urbano', 'QUOTA': quota})
 
-        rural_target = quota * rural_p
-        urban_target = quota * urban_p
+        # Distribute Quota into Gender/Age buckets
+        # using State's demographic distribution from design file
+        
+        # Get State Demographics
+        state_demo = df_design[df_design['estado_norm'] == state].copy()
+        state_total_pop = state_demo['poblacion'].sum()
+        
+        if state_total_pop == 0:
+            continue
+            
+        for muni_info in selected_munis:
+            muni_quota = muni_info['QUOTA']
+            if muni_quota == 0:
+                continue
+            
+            # Create a distribution list for this muni
+            muni_sample_distribution = []
+            
+            # First pass: calculate float quotas
+            state_demo['temp_quota'] = (state_demo['poblacion'] / state_total_pop) * muni_quota
+            state_demo['int_quota'] = state_demo['temp_quota'].astype(int)
+            state_demo['decimal_part'] = state_demo['temp_quota'] - state_demo['int_quota']
+            
+            # Calculate remainder
+            assigned_total = state_demo['int_quota'].sum()
+            remainder_quota = muni_quota - assigned_total
+            
+            # Distribute remainder to largest decimals
+            if remainder_quota > 0:
+                # Sort by decimal part descending
+                state_demo = state_demo.sort_values('decimal_part', ascending=False)
+                # Add 1 to the top 'remainder_quota' rows
+                state_demo.iloc[:remainder_quota, state_demo.columns.get_loc('int_quota')] += 1
+            
+            # Collect results
+            for _, row in state_demo.iterrows():
+                if row['int_quota'] > 0:
+                    sample_list.append({
+                        'Estado': row['estado'], # Original name
+                        'Municipio': muni_info['MUNICIPIO'],
+                        'Tipo': muni_info['TIPO'],
+                        'Género': row['genero'],
+                        'Grupo de Edad': row['grupo_edad'],
+                        'Cuota': row['int_quota']
+                    })
 
-        # Rounding split
-        r_q = int(rural_target)
-        u_q = int(urban_target)
-        rem = quota - (r_q + u_q)
+    df_sample_design = pd.DataFrame(sample_list)
+    # Sort for cleaner output
+    if not df_sample_design.empty:
+        df_sample_design = df_sample_design.sort_values(['Estado', 'Municipio', 'Tipo', 'Género', 'Grupo de Edad'])
+        
+    return df_sample_design
 
-        # Assign remainder to larger fraction
-        if (rural_target % 1) >= (urban_target % 1):
-             r_q += rem
-        else:
-             u_q += rem
+def pivot_field_plan(df_sample_design):
+    if df_sample_design.empty:
+        return df_sample_design
+        
+    # Create combined column for Gender - Age
+    df_sample_design['Segmento'] = df_sample_design['Género'] + ' - ' + df_sample_design['Grupo de Edad']
+    
+    # Pivot
+    df_pivot = df_sample_design.pivot_table(
+        index=['Estado', 'Municipio', 'Tipo'],
+        columns='Segmento',
+        values='Cuota',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+    
+    # Calculate Total per Municipality
+    quota_cols = [c for c in df_pivot.columns if c not in ['Estado', 'Municipio', 'Tipo']]
+    df_pivot['Total Muestra'] = df_pivot[quota_cols].sum(axis=1)
+    
+    return df_pivot
 
-        # Distribute
-        for tipo, q_sub in [('Rural', r_q), ('Urbano', u_q)]:
-            if q_sub > 0:
-                munis = selection_map.get(state, {}).get(tipo, [])
-
-                # Fallback if no munis found but quota exists
-                if not munis:
-                    other_tipo = 'Urbano' if tipo == 'Rural' else 'Rural'
-                    munis = selection_map.get(state, {}).get(other_tipo, [])
-                    if not munis:
-                        munis = [f"Sin Municipio ({orig_state_name})"]
-
-                k = len(munis)
-                base = q_sub // k
-                rem_sub = q_sub % k
-
-                # Random distribution of remainder
-                indices = np.random.permutation(k)
-
-                for i in range(k):
-                    m_idx = indices[i]
-                    val = base + 1 if i < rem_sub else base
-
-                    if val > 0:
-                        output_rows.append({
-                            'Estado': orig_state_name,
-                            'Municipio': munis[m_idx],
-                            'Tipo': tipo,
-                            'Género': gender,
-                            'Grupo de Edad': age,
-                            'Cuota': int(val)
-                        })
-
-    df_output = pd.DataFrame(output_rows)
-    if not df_output.empty:
-        df_output = df_output.sort_values(['Estado', 'Tipo', 'Municipio', 'Género', 'Grupo de Edad'])
-
-    return df_output
-
-def generate_metrics_sheet(total_sample, total_population):
-    Z = 1.96
-    p = 0.5
-    N = total_population
-
-    fpc = np.sqrt((N - total_sample) / (N - 1)) if N > total_sample else 1
-    moe = Z * np.sqrt((p * (1-p)) / total_sample) * fpc
-
-    metrics = [
-        {'Métrica': 'Tamaño de Muestra Total (n)', 'Valor': total_sample},
-        {'Métrica': 'Población Total (N)', 'Valor': N},
-        {'Métrica': 'Nivel de Confianza', 'Valor': '95% (Z=1.96)'},
-        {'Métrica': 'Margen de Error (MoE)', 'Valor': f"{moe:.2%} (+/- {moe*100:.2f}%)"},
-        {'Métrica': 'Proporción Asumida (p)', 'Valor': 0.5},
-        {'Métrica': 'Efecto de Diseño (Deff)', 'Valor': '1.5 (Estimado)'},
-        {'Métrica': 'Nota 1', 'Valor': 'Selección de municipios aleatoria (Uniforme) por falta de datos poblacionales a nivel municipal.'},
-        {'Métrica': 'Nota 2', 'Valor': 'Cuotas ajustadas para sumar exactamente 3000.'}
-    ]
-
-    return pd.DataFrame(metrics)
-
-def main():
+def main(target_n=DEFAULT_TARGET_N, n_states=DEFAULT_N_STATES, munis_per_state=DEFAULT_MUNIS_PER_STATE):
     try:
         df_design, df_rural = load_data()
-
-        total_pop = df_design['poblacion'].sum()
-
-        df_field_plan = generate_field_plan(df_design, df_rural)
-
-        actual_total = df_field_plan['Cuota'].sum() if not df_field_plan.empty else 0
-        df_metrics = generate_metrics_sheet(actual_total, total_pop)
-
+        
         # 1. Simulation Sheet
         df_simulation = simulate_scenarios(df_design)
-
-        # 2. Sample Design Sheet
-        df_sample_design = select_sample(df_design, df_rural, target_n=TARGET_N, n_states=N_STATES, munis_per_state=MUNIS_PER_STATE)
-
-        # 3. Metrics Sheet
-        if not df_sample_design.empty:
-            actual_n = df_sample_design['Cuota'].sum()
+        
+        # 2. Sample Design Sheet (Raw)
+        df_sample_design_raw = select_sample(df_design, df_rural, target_n, n_states, munis_per_state)
+        
+        # 3. Pivot Design Sheet (Wide format)
+        df_field_plan = pivot_field_plan(df_sample_design_raw)
+        
+        # 4. Metrics Sheet
+        if not df_sample_design_raw.empty:
+            actual_n = df_sample_design_raw['Cuota'].sum()
             N = df_design['poblacion'].sum()
             p = 0.5
             q = 0.5
             Z = 1.96
             Deff = 1.5
-
+            
             se = np.sqrt((p*q)/actual_n) if actual_n > 0 else 0
             fpc = np.sqrt((N-actual_n)/(N-1)) if N > 1 else 1
             moe = Z * se * np.sqrt(Deff) * fpc
-
+            
             metrics = [{
+                'Tamaño de Muestra Objetivo': target_n,
                 'Tamaño de Muestra Real': actual_n,
                 'Margen de Error (95%)': moe,
                 'Nivel de Confianza': '95%',
                 'Efecto de Diseño': Deff,
                 'Población Total (Referencia)': N,
-                'Estados Seleccionados': df_sample_design['Estado'].nunique(),
-                'Municipios Seleccionados': df_sample_design['Municipio'].nunique()
+                'Estados Objetivo': n_states,
+                'Municipios por Estado Objetivo': munis_per_state,
+                'Estados Seleccionados': df_sample_design_raw['Estado'].nunique(),
+                'Municipios Seleccionados': df_sample_design_raw['Municipio'].nunique()
             }]
             df_metrics = pd.DataFrame(metrics)
         else:
@@ -258,18 +292,27 @@ def main():
 
         # Write to Excel with multiple sheets
         output_file = 'plan_de_campo.xlsx'
-        with pd.ExcelWriter(output_file) as writer:
-            if not df_field_plan.empty:
-                df_field_plan.to_excel(writer, sheet_name='Plan de Campo', index=False)
+        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+            df_field_plan.to_excel(writer, sheet_name='Plan de Campo', index=False)
             df_metrics.to_excel(writer, sheet_name='Métricas', index=False)
-
+            df_simulation.to_excel(writer, sheet_name='Simulación Muestra', index=False)
+            # Optional: Raw data
+            # df_sample_design_raw.to_excel(writer, sheet_name='Data Cruda', index=False)
+            
         print(f"Field design saved to {output_file}")
-        print(f"Total Quota Generated: {actual_total}")
-
+        
     except Exception as e:
         print(f"An error occurred: {e}")
         import traceback
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    import sys
+    # Simple argument parsing if run from CLI
+    # python create_field_design.py 3000 10 2
+    args = sys.argv[1:]
+    t_n = int(args[0]) if len(args) > 0 else DEFAULT_TARGET_N
+    n_s = int(args[1]) if len(args) > 1 else DEFAULT_N_STATES
+    m_s = int(args[2]) if len(args) > 2 else DEFAULT_MUNIS_PER_STATE
+    
+    main(target_n=t_n, n_states=n_s, munis_per_state=m_s)
