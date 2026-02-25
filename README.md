@@ -5,7 +5,7 @@ This repository contains scripts and data for processing survey samples, calcula
 ## Files
 
 - `process_sample.py`: Main script to process collected data, calculate weights, and generate `dashboard.html`.
-- `create_field_design.py`: Script to generate `plan_de_campo.xlsx` with detailed quotas for field work (State, Rural/Urban, Gender, Age).
+- `create_field_design.py`: Script to generate `plan_de_campo.xlsx`. It scales the design to 3000 surveys, selects municipalities (Rural/Urban), and calculates detailed quotas.
 - `stratified_sampling.py`: Alternative script for design error calculation.
 - `analysis_notebook.ipynb`: Jupyter Notebook designed to run the analysis and generate field plans in Google Colab.
 - `sample_data.csv`: Input survey data (semicolon separated).
@@ -21,7 +21,9 @@ To run the analysis or generate field plans in Google Colab using the provided n
 3.  **Run All Cells**: Execute the cells in order.
     -   The notebook will mount your Google Drive and clone the repository.
     -   It will install necessary dependencies.
-    -   **Generate Field Design**: A cell is provided to run `create_field_design.py`, which produces `plan_de_campo.xlsx` containing the target quotas for field workers.
+    -   **Generate Field Design**: A cell is provided to run `create_field_design.py`. This produces `plan_de_campo.xlsx` with two sheets:
+        -   `Plan de Campo`: Rows with State, Municipality, Type, Gender, Age, and Quota.
+        -   `Métricas`: Sampling metrics (Confidence Level, Margin of Error, etc.).
     -   **Run Analysis**: It will run `process_sample.py` to process `sample_data.csv` and display the dashboard.
 
 ## Local Execution
